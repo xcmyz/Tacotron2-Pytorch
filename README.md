@@ -1,2 +1,2 @@
 # Tacotron2-Pytorch
-follow NVIDIA, simply it.
+follow NVIDIA, simplify it.
