@@ -4,7 +4,7 @@ from torch import optim
 
 from network import Tacotron2
 from data_utils import DataLoader, collate_fn
-from data_utils import Tacotron2DataLoader
+from data_utils import Tacotron2Dataset
 from loss_function import Tacotron2Loss
 import hparams as hp
 
@@ -26,9 +26,11 @@ def main(args):
     model = nn.DataParallel(Tacotron2(hp)).to(device)
     # model = Tacotron2(hp).to(device)
     print("Model Have Been Defined")
+    num_param = sum(param.numel() for param in model.parameters())
+    print('Number of Tacotron Parameters:', num_param)
 
     # Get dataset
-    dataset = Tacotron2DataLoader(hp.dataset_path)
+    dataset = Tacotron2Dataset()
 
     # Optimizer
     optimizer = torch.optim.Adam(
@@ -36,11 +38,6 @@ def main(args):
 
     # Criterion
     criterion = Tacotron2Loss()
-
-    # Get training loader
-    print("Get Training Loader")
-    training_loader = DataLoader(dataset, batch_size=hp.batch_size, shuffle=True,
-                                 collate_fn=collate_fn, drop_last=True, num_workers=cpu_count())
 
     # Load checkpoint if exists
     try:
@@ -55,103 +52,135 @@ def main(args):
         if not os.path.exists(hp.checkpoint_path):
             os.mkdir(hp.checkpoint_path)
 
+    # Init logger
+    if not os.path.exists(hp.logger_path):
+        os.mkdir(hp.logger_path)
+
     # Define Some Information
-    total_step = hp.epochs * len(training_loader)
     Time = np.array([])
-    Start = time.perf_counter()
+    Start = time.clock()
 
     # Training
     model = model.train()
 
     for epoch in range(hp.epochs):
-        for i, batch in enumerate(training_loader):
-            start_time = time.perf_counter()
+        # Get training loader
+        training_loader = DataLoader(dataset,
+                                     batch_size=hp.batch_size**2,
+                                     shuffle=True,
+                                     collate_fn=collate_fn,
+                                     drop_last=True,
+                                     num_workers=cpu_count())
+        total_step = hp.epochs * len(training_loader) * hp.batch_size
 
-            # Count step
-            current_step = i + args.restore_step + \
-                epoch * len(training_loader) + 1
+        for i, batchs in enumerate(training_loader):
+            for j, data_of_batch in enumerate(batchs):
+                start_time = time.clock()
 
-            # Init
-            optimizer.zero_grad()
+                current_step = i * hp.batch_size + j + args.restore_step + \
+                    epoch * len(training_loader)*hp.batch_size + 1
 
-            # Load Data
-            text_padded, input_lengths, mel_padded, gate_padded, output_lengths = batch
+                # Init
+                optimizer.zero_grad()
 
-            if cuda_available:
-                text_padded = torch.from_numpy(text_padded).type(
-                    torch.cuda.LongTensor).to(device)
-            else:
-                text_padded = torch.from_numpy(text_padded).type(
-                    torch.LongTensor).to(device)
-            mel_padded = torch.from_numpy(mel_padded).to(device)
+                # Get Data
+                character = torch.from_numpy(
+                    data_of_batch["text"]).long().to(device)
+                mel_target = torch.from_numpy(data_of_batch["mel_target"]).float().to(
+                    device).contiguous().transpose(1, 2)
+                stop_target = torch.from_numpy(
+                    data_of_batch["stop_token"]).float().to(device)
+                input_lengths = torch.from_numpy(
+                    data_of_batch["length_text"]).int().to(device)
+                output_lengths = torch.from_numpy(
+                    data_of_batch["length_mel"]).int().to(device)
+                # print(mel_target.size())
+                # print(mel_target)
 
-            gate_padded = torch.from_numpy(gate_padded).to(device)
+                # Forward
+                batch = character, input_lengths, mel_target, stop_target, output_lengths
 
-            input_lengths = torch.from_numpy(input_lengths).to(device)
-            output_lengths = torch.from_numpy(output_lengths).to(device)
+                x, y = model.module.parse_batch(batch)
+                y_pred = model(x)
 
-            # print("mel", mel_padded.size())
-            # print("text", text_padded.size())
-            # print("gate", gate_padded.size())
+                # Cal Loss
+                mel_loss, mel_postnet_loss, stop_pred_loss = criterion(
+                    y_pred, y)
+                total_loss = mel_loss + mel_postnet_loss + stop_pred_loss
 
-            batch = text_padded, input_lengths, mel_padded, gate_padded, output_lengths
+                # Logger
+                t_l = total_loss.item()
+                m_l = mel_loss.item()
+                m_p_l = mel_postnet_loss.item()
+                s_l = stop_pred_loss.item()
 
-            x, y = model.module.parse_batch(batch)
-            y_pred = model(x)
+                with open(os.path.join("logger", "total_loss.txt"), "a") as f_total_loss:
+                    f_total_loss.write(str(t_l)+"\n")
 
-            # Loss
-            loss, mel_loss, gate_loss = criterion(y_pred, y)
+                with open(os.path.join("logger", "mel_loss.txt"), "a") as f_mel_loss:
+                    f_mel_loss.write(str(m_l)+"\n")
 
-            # Backward
-            loss.backward()
+                with open(os.path.join("logger", "mel_postnet_loss.txt"), "a") as f_mel_postnet_loss:
+                    f_mel_postnet_loss.write(str(m_p_l)+"\n")
 
-            # Clipping gradients to avoid gradient explosion
-            nn.utils.clip_grad_norm_(model.parameters(), hp.grad_clip_thresh)
+                with open(os.path.join("logger", "stop_pred_loss.txt"), "a") as f_s_loss:
+                    f_s_loss.write(str(s_l)+"\n")
 
-            # Update weights
-            optimizer.step()
+                # Backward
+                total_loss.backward()
 
-            if current_step % hp.log_step == 0:
-                Now = time.perf_counter()
-                str_loss = "Epoch [{}/{}], Step [{}/{}], Mel Loss: {:.4f}, Gate Loss: {:.4f}, Total Loss: {:.4f}.".format(
-                    epoch + 1, hp.epochs, current_step, total_step, mel_loss.item(), gate_loss.item(), loss.item())
-                str_time = "Time Used: {:.3f}s, Estimated Time Remaining: {:.3f}s.".format(
-                    (Now - Start), (total_step - current_step) * np.mean(Time))
+                # Clipping gradients to avoid gradient explosion
+                nn.utils.clip_grad_norm_(model.parameters(), 1.)
 
-                print(str_loss)
-                print(str_time)
-                with open("logger.txt", "a")as f_logger:
-                    f_logger.write(str_loss + "\n")
-                    f_logger.write(str_time + "\n")
-                    f_logger.write("\n")
+                # Update weights
+                optimizer.step()
+                adjust_learning_rate(optimizer, current_step)
 
-            if current_step % hp.save_step == 0:
-                torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict(
-                )}, os.path.join(hp.checkpoint_path, 'checkpoint_%d.pth.tar' % current_step))
-                print("\nsave model at step %d ...\n" % current_step)
+                # Print
+                if current_step % hp.log_step == 0:
+                    Now = time.clock()
 
-            if current_step in hp.decay_step:
-                optimizer = adjust_learning_rate(optimizer, current_step)
+                    str1 = "Epoch [{}/{}], Step [{}/{}], Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f};".format(
+                        epoch+1, hp.epochs, current_step, total_step, mel_loss.item(), mel_postnet_loss.item())
+                    str2 = "Stop Predicted Loss: {:.4f}, Total Loss: {:.4f}.".format(
+                        stop_pred_loss.item(), total_loss.item())
+                    str3 = "Time Used: {:.3f}s, Estimated Time Remaining: {:.3f}s.".format(
+                        (Now-Start), (total_step-current_step)*np.mean(Time))
 
-            end_time = time.perf_counter()
-            Time = np.append(Time, end_time - start_time)
-            if len(Time) == hp.clear_Time:
-                temp_value = np.mean(Time)
-                Time = np.delete(
-                    Time, [i for i in range(len(Time))], axis=None)
-                Time = np.append(Time, temp_value)
+                    print("\n" + str1)
+                    print(str2)
+                    print(str3)
+
+                    with open(os.path.join("logger", "logger.txt"), "a") as f_logger:
+                        f_logger.write(str1 + "\n")
+                        f_logger.write(str2 + "\n")
+                        f_logger.write(str3 + "\n")
+                        f_logger.write("\n")
+
+                if current_step % hp.save_step == 0:
+                    torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict(
+                    )}, os.path.join(hp.checkpoint_path, 'checkpoint_%d.pth.tar' % current_step))
+                    print("save model at step %d ..." % current_step)
+
+                end_time = time.clock()
+                Time = np.append(Time, end_time - start_time)
+                if len(Time) == hp.clear_Time:
+                    temp_value = np.mean(Time)
+                    Time = np.delete(
+                        Time, [i for i in range(len(Time))], axis=None)
+                    Time = np.append(Time, temp_value)
 
 
 def adjust_learning_rate(optimizer, step):
-    if step == 100000:
+    if step == 500000:
         for param_group in optimizer.param_groups:
             param_group['lr'] = 0.0005
 
-    elif step == 200000:
+    elif step == 1000000:
         for param_group in optimizer.param_groups:
             param_group['lr'] = 0.0003
 
-    elif step == 300000:
+    elif step == 2000000:
         for param_group in optimizer.param_groups:
             param_group['lr'] = 0.0001
 
@@ -161,7 +190,7 @@ def adjust_learning_rate(optimizer, step):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--restore_step', type=int,
-                        help='Global step to restore checkpoint', default=170100)
+                        help='Global step to restore checkpoint', default=0)
 
     args = parser.parse_args()
     main(args)
