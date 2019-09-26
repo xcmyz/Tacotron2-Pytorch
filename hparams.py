@@ -21,9 +21,10 @@ prenet_dim = 256
 # Encoder
 encoder_n_convolutions = 3
 encoder_embedding_dim = 512
+# encoder_embedding_dim = 1024
 encoder_kernel_size = 5
 
-# Decodr
+# Decoder
 attention_rnn_dim = 1024
 decoder_rnn_dim = 1024
 max_decoder_steps = 1000
@@ -38,9 +39,10 @@ attention_dim = 128
 mask_padding = True
 n_symbols = len(symbols)
 symbols_embedding_dim = 512
+# symbols_embedding_dim = 1024
 
 # Train
-batch_size = 16
+batch_size = 32
 epochs = 10000
 dataset_path = "./dataset"
 checkpoint_path = "./model_new"
@@ -49,6 +51,6 @@ learning_rate = 1e-3
 weight_decay = 1e-6
 grad_clip_thresh = 1.0
 decay_step = [500000, 1000000, 2000000]
-save_step = 2000
+save_step = 200
 log_step = 5
 clear_Time = 20

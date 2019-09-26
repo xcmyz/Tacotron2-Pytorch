@@ -51,9 +51,14 @@ def synthesis(model, text):
 
 if __name__ == "__main__":
     # Test
-    num = 18000
+    num = 76000
     model = get_model(num)
-    text = "Generative adversarial network or variational auto-encoder."
+    # checkpoint_path = "tacotron2_statedict.pt"
+    # model = nn.DataParallel(Tacotron2(hp)).to(device)
+    # model.load_state_dict(torch.load(os.path.join(
+    #     hp.checkpoint_path, checkpoint_path))['state_dict'])
+    # model.eval()
+    text = "I am very happy to see you again!"
     mel, mel_postnet, mel_postnet_torch = synthesis(model, text)
     if not os.path.exists("results"):
         os.mkdir("results")

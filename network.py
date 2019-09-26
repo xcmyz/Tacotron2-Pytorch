@@ -529,9 +529,11 @@ class Tacotron2(nn.Module):
         input_lengths, output_lengths = input_lengths.data, output_lengths.data
 
         embedded_inputs = self.embedding(inputs).transpose(1, 2)
+        # print(embedded_inputs)
 
         encoder_outputs = self.encoder(
             embedded_inputs, input_lengths, max_input_len)
+        # print(encoder_outputs)
 
         mel_outputs, gate_outputs, alignments = self.decoder(
             encoder_outputs, targets, input_lengths, max_input_len)

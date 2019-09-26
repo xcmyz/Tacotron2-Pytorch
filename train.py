@@ -189,8 +189,7 @@ def adjust_learning_rate(optimizer, step):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--restore_step', type=int,
-                        help='Global step to restore checkpoint', default=0)
-
+    parser.add_argument('--restore_step', type=int, default=0)
     args = parser.parse_args()
+
     main(args)

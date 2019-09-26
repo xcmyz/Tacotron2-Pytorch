@@ -1,5 +1,4 @@
 import os
-from multiprocessing import cpu_count
 from tqdm import tqdm
 from data import ljspeech
 
